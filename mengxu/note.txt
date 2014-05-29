@@ -1,0 +1,48 @@
+xenalyze.c
+===
+How to read the --dump-all output?
+
+void dump_generic(FILE * f, struct record_info *ri)
+{
+    int i;
+
+    fprintf(f, "]%s %7x(%x:%x:%x) %u [",
+           ri->dump_header,
+           ri->event,
+           ri->evt.main,
+           ri->evt.sub,
+           ri->evt.minor,
+           ri->extra_words);
+
+    for(i=0; i<ri->extra_words; i++) {
+        fprintf(f, " %x", ri->d[i]);
+    }
+
+    fprintf(f, " ]\n");
+}  
+
+-it dumps the event (sub-event number), and then dump the record_info's data field (u32 type) one by one for extra_words entries!
+
+__fill_in_record_info(p)
+-it creates the pcpu_info item by using the trace data; this pcpu_info item has field struct record_info, which will be dumped by using dump_generic().
+
+/* -- on-disk trace buffer definitions -- */
+struct trace_record {
+    union {
+        struct {
+            unsigned event:28,
+                extra_words:3,
+                cycle_flag:1;
+            union {
+                struct {
+                    uint32_t tsc_lo, tsc_hi;
+                    uint32_t data[7];
+                } tsc;
+                struct {
+                    uint32_t data[7];
+                } notsc;
+            } u;
+        };
+        uint32_t raw[8];
+    };
+};

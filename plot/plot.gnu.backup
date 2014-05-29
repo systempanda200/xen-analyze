@@ -1,0 +1,14 @@
+set term png enhanced size 1024, 768 font 'Times-Roman'
+set output 'd16_vcpus.png'
+set title 'vCPU on pCPU execution'
+set grid
+set key outside bottom center horizontal
+set xrange [0:]
+set yrange [0:16]
+set xtics 100
+set ytics 16
+set xlabel 'pCPU'
+set ylabel 'Time'
+plot \
+	'< paste d3v0.txt d3v1.txt' u 2:3 ti 'd16v0' w p lw 2, \
+	'< paste d3v0.txt d3v1.txt' u 5:6 ti 'd16v1' w p lw 2
