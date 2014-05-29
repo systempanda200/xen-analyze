@@ -1,0 +1,51 @@
+diff -r 0e8aad1282e7 xenalyze.c
+--- a/xenalyze.c	Mon Aug 31 14:34:51 2009 +0100
++++ b/xenalyze.c	Mon Aug 31 14:36:27 2009 +0100
+@@ -4624,15 +4624,10 @@
+                 unsigned long exit_reason;
+                 unsigned long long rip;
+             } x64;
+-            struct {
+-                unsigned long exit_reason;
+-                unsigned long eip;
+-            } x32;
+         };
+     } *r;
+ 
+     if(ri->extra_words != 4
+-       && ri->extra_words != 3
+         )
+     {
+         fprintf(warn, "FATAL: vmexit has unexpected extra words %d!\n",
+@@ -4649,29 +4644,14 @@
+     h->vmexit_valid=1;
+ 
+     if(ri->event == TRC_HVM_VMEXIT64) {
+-        if(v->guest_paging_levels != 4)
+-        {
+-            fprintf(warn, "%s: VMEXIT64, but guest_paging_levels %d.  Switching to 4.\n",
+-                    __func__, v->guest_paging_levels);
+-            v->guest_paging_levels = 4;
+-        }
+         if(!is_valid_addr64(r->x64.rip))
+             fprintf(warn, "%s: invalid va %llx",
+                     __func__, r->x64.rip);
+         h->rip = r->x64.rip;
+         h->exit_reason = r->x64.exit_reason;
+     } else {
+-        if(v->guest_paging_levels == 4)
+-        {
+-            int new_paging_levels = opt.default_guest_paging_levels;
+-            if(new_paging_levels == 4)
+-                new_paging_levels = 2; /* Wild guess */
+-            fprintf(warn, "%s: VMEXIT, but guest_paging_levels %d.  Switching to %d(default).\n",
+-                    __func__, v->guest_paging_levels, new_paging_levels);
+-            v->guest_paging_levels = new_paging_levels;
+-        }
+-        h->rip = r->x32.eip;
+-        h->exit_reason = r->x32.exit_reason;
++        fprintf(stderr, "FATAL: Expected 64-bit-only traces from 3.4!\n");
++        exit(1);
+     }
+ 
+     if(opt.scatterplot_vmexit_eip)

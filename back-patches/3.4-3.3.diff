@@ -1,0 +1,563 @@
+diff -r 31e7ac4ed3c2 trace.h
+--- a/trace.h	Fri Oct 09 11:57:09 2009 +0100
++++ b/trace.h	Fri Oct 09 14:52:39 2009 +0100
+@@ -59,8 +59,7 @@
+ #define TRC_TRACE_WRAP_BUFFER  (TRC_GEN + 2)
+ #define TRC_TRACE_CPU_CHANGE    (TRC_GEN + 3)
+ 
+-#define TRC_SCHED_RUNSTATE_CHANGE   (TRC_SCHED_MIN + 1)
+-#define TRC_SCHED_CONTINUE_RUNNING  (TRC_SCHED_MIN + 2)
++#define TRC_SCHED_RUNSTATE_CHANGE (TRC_SCHED_MIN + 1)
+ #define TRC_SCHED_DOM_ADD        (TRC_SCHED_VERBOSE +  1)
+ #define TRC_SCHED_DOM_REM        (TRC_SCHED_VERBOSE +  2)
+ #define TRC_SCHED_SLEEP          (TRC_SCHED_VERBOSE +  3)
+@@ -92,7 +91,6 @@
+ #define TRC_PV_GDT_LDT_MAPPING_FAULT (TRC_PV + 10)
+ #define TRC_PV_PTWR_EMULATION        (TRC_PV + 11)
+ #define TRC_PV_PTWR_EMULATION_PAE    (TRC_PV + 12)
+-#define TRC_PV_UPDATE_VA_MAPPING     (TRC_PV + 13)
+   /* Indicates that addresses in trace record are 64 bits */
+ #define TRC_64_FLAG               (0x100) 
+ 
+@@ -147,7 +145,6 @@
+ #define TRC_HVM_CLTS            (TRC_HVM_HANDLER + 0x18)
+ #define TRC_HVM_LMSW            (TRC_HVM_HANDLER + 0x19)
+ #define TRC_HVM_LMSW64          (TRC_HVM_HANDLER + TRC_64_FLAG + 0x19)
+-#define TRC_HVM_INTR_WINDOW     (TRC_HVM_HANDLER + 0X20)
+ 
+ /* This structure represents a single trace buffer record. */
+ struct t_rec {
+diff -r 31e7ac4ed3c2 xenalyze.c
+--- a/xenalyze.c	Fri Oct 09 11:57:09 2009 +0100
++++ b/xenalyze.c	Fri Oct 09 14:52:39 2009 +0100
+@@ -1088,7 +1088,8 @@
+     PF_XEN_EMULATE_UNSHADOW_USER,
+     PF_XEN_EMULATE_UNSHADOW_EVTINJ,
+     PF_XEN_EMULATE_UNSHADOW_UNHANDLED,
+-    PF_XEN_LAST_FAULT=PF_XEN_EMULATE_UNSHADOW_UNHANDLED,
++    PF_XEN_EMULATE_UNSHADOW_HEURISTIC,
++    PF_XEN_LAST_FAULT=PF_XEN_EMULATE_UNSHADOW_HEURISTIC,
+     PF_XEN_NON_EMULATE,
+     PF_XEN_NO_HANDLER,
+     PF_XEN_MAX,
+@@ -1340,7 +1341,6 @@
+     PV_GDT_LDT_MAPPING_FAULT,
+     PV_PTWR_EMULATION,
+     PV_PTWR_EMULATION_PAE,
+-    PV_UPDATE_VA_MAPPING,
+     PV_MAX
+ };
+ 
+@@ -1354,8 +1354,7 @@
+     [PV_MATH_STATE_RESTORE]="math state restore",
+     [PV_PAGING_FIXUP]="paging fixup",
+     [PV_GDT_LDT_MAPPING_FAULT]="gdt/ldt mapping fault",
+-    [PV_PTWR_EMULATION]="ptwr",
+-    [PV_PTWR_EMULATION_PAE]="ptwr(pae)"
++    [PV_PTWR_EMULATION]="writable pt emulation"
+ };
+ 
+ #define PV_HYPERCALL_MAX 56
+@@ -1650,12 +1649,14 @@
+ 
+     /* Information related to domain tracking */
+     struct vcpu_data * current;
++#if 0
+     struct {
+         unsigned active:1,
+             domain_valid:1;
+         unsigned did:16,vid:16;
+         tsc_t tsc;
+     } lost_record;
++#endif
+ 
+     /* Record volume */
+     struct {
+@@ -3170,12 +3171,18 @@
+ 
+     if(ri->event == TRC_HVM_PF_XEN64
+         && h->v->guest_paging_levels != 4)
+-        fprintf(warn, "Strange, PF_XEN64 but guest_paging_levels %d!\n",
++    {
++        fprintf(warn, "PF_XEN64 but guest_paging_levels %d, switching to 4.\n",
+                 h->v->guest_paging_levels);
++        h->v->guest_paging_levels = 4;
++    }
+     else if(ri->event == TRC_HVM_PF_XEN
+             && h->v->guest_paging_levels == 4)
+-        fprintf(warn, "Strange, PF_XEN but guest_paging_levels %d!\n",
++    {
++        fprintf(warn, "PF_XEN but guest_paging_levels %d,. switching to 2.\n",
+                 h->v->guest_paging_levels);
++        h->v->guest_paging_levels = 2;
++    }
+ 
+     hvm_pf_xen_preprocess(ri->event, h);
+     
+@@ -3662,7 +3669,6 @@
+                mevt.write?"write":"read",
+                r->x32.port,
+                r->x32.data);
+-        dump_generic(stdout, ri);
+     }
+ }
+ 
+@@ -4408,10 +4414,6 @@
+     case TRC_HVM_INJ_VIRQ:
+         hvm_inj_virq_process(ri, h);
+         break;
+-    case TRC_HVM_INTR_WINDOW:
+-        if ( opt.dump_all )
+-            hvm_generic_dump(ri," ");
+-        break;
+     case TRC_HVM_OP_DESTROY_PROC:
+         if(h->v->cr3.data) {
+             struct cr3_value_struct *cur = h->v->cr3.data;
+@@ -4621,7 +4623,8 @@
+     struct {
+         union {
+             struct {
+-                unsigned long exit_reason;
++                unsigned domain:16, vcpu:16;
++                unsigned exit_reason;
+                 unsigned long long rip;
+             } x64;
+         };
+@@ -5839,94 +5842,6 @@
+     }
+ }
+ 
+-void pv_ptwr_emulation_process(struct record_info *ri, struct pv_data *pv) {
+-    union pv_event pevt = { .event = ri->event };
+-    union {
+-        /* gpl2 is deprecated */
+-        struct {
+-            unsigned long long pte;
+-            unsigned long addr, eip;
+-        } gpl3;
+-        struct {
+-            unsigned long long pte;
+-            unsigned long long addr, eip;
+-        } gpl4;
+-    } *r = (typeof(r))ri->d;
+-    struct {
+-        unsigned long long pte, addr, eip;
+-    } e;
+-    
+-    switch ( pevt.minor ) {
+-    case PV_PTWR_EMULATION_PAE:
+-        if ( pevt.x64 )
+-        {
+-            fprintf(warn, "Strange: PV_PTWR_EMULATION, but x64! %x\n",
+-                    ri->event);
+-            exit(1);
+-        }
+-        e.pte = r->gpl3.pte;
+-        e.addr = r->gpl3.addr;
+-        e.eip = r->gpl3.eip;
+-        break;
+-    case PV_PTWR_EMULATION:
+-        if ( !pevt.x64 )
+-        {
+-            fprintf(warn, "Strange: PV_PTWR_EMULATION, but !x64! %x\n",
+-                    ri->event);
+-            exit(1);
+-        }
+-        e.pte = r->gpl4.pte;
+-        e.addr = r->gpl4.addr;
+-        e.eip = r->gpl4.eip;
+-        break;
+-    }
+-
+-    if ( opt.dump_cooked || opt.dump_all )
+-    {
+-        printf(" %s ptwr l1e %llx eip %llx addr %llx\n",
+-               ri->dump_header,
+-               e.pte, e.eip, e.addr);
+-    }
+-}
+-
+-void pv_update_va_mapping_process(struct record_info *ri, struct pv_data *pv) {
+-    union pv_event pevt = { .event = ri->event };
+-    union {
+-        /* gpl2 is deprecated */
+-        struct {
+-            unsigned long long val;
+-            unsigned long va, flags;
+-        } x32;
+-        struct {
+-            unsigned long long val;
+-            unsigned long long va, flags;
+-        } x64;
+-    } *r = (typeof(r))ri->d;
+-    struct {
+-        unsigned long long val, va, flags;
+-    } e;
+-
+-    if ( pevt.x64 )
+-    {
+-        e.val = r->x64.val;
+-        e.va = r->x64.va;
+-        e.flags = r->x64.flags;
+-    }
+-    else
+-    {
+-        e.val = r->x32.val;
+-        e.va = r->x32.va;
+-        e.flags = r->x32.flags;
+-    }
+-
+-    if ( opt.dump_cooked || opt.dump_all )
+-    {
+-        printf(" %s update_va_mapping l1e %llx va %llx flags %llx\n",
+-               ri->dump_header,
+-               e.val, e.va, e.flags);
+-    }
+-}
+-
+ void pv_generic_process(struct record_info *ri, struct pv_data *pv) {
+     union pv_event pevt = { .event = ri->event };
+     if ( opt.dump_cooked || opt.dump_all ) {
+@@ -6019,15 +5934,12 @@
+     case PV_TRAP:
+         pv_trap_process(ri, pv);
+         break;
++    case PV_PAGE_FAULT:
++        //pv_pf_process(ri, pv);
++        //break;
+     case PV_PTWR_EMULATION:
+     case PV_PTWR_EMULATION_PAE:
+-        pv_ptwr_emulation_process(ri, pv);
+-        break;
+-    case PV_UPDATE_VA_MAPPING:
+-        pv_update_va_mapping_process(ri, pv);
+-        break;
+-    case PV_PAGE_FAULT:
+-        //pv_pf_process(ri, pv);
++        //pv_ptwr_emulation_process(ri, pv);
+         //break;
+     default:
+         pv_generic_process(ri, pv);
+@@ -6247,12 +6159,8 @@
+     v->p = p;
+ }
+ 
+-void sched_runstate_process(struct pcpu_info *p)
+-{
+-    enum {
+-        CHANGE=0,
+-        CONTINUE
+-    } type;
++void sched_runstate_change_process(struct pcpu_info *p)
++{
+     struct vcpu_data *v;
+     struct record_info *ri = &p->ri;
+     struct {
+@@ -6269,43 +6177,23 @@
+                 main:12,
+                 unused:4;
+         };
+-    } _sevt = { .event = ri->event };
+-    struct {
+-        int new_runstate, old_runstate;
+-    } sevt;
++    } sevt = { .event = ri->event };
+     int perfctrs;
+     struct last_oldstate_struct last_oldstate;
+-    tsc_t runstate_tsc;
+-    int old_runstate;
+-
+-    switch(_sevt.lo)
+-    {
+-    case 1:
+-        type = CHANGE;
+-        sevt.new_runstate = _sevt.new_runstate;
+-        sevt.old_runstate = _sevt.old_runstate;
+-        break;
+-    case 2:
+-        type = CONTINUE;
+-        sevt.new_runstate = sevt.old_runstate = RUNSTATE_RUNNING;
+-        break;
+-    }
+ 
+     perfctrs = (ri->extra_words == 5);
+ 
+     if(opt.dump_cooked || opt.dump_all) {
+         if( perfctrs ) {
+-            printf(" %s %s {%lld,%lld} d%uv%u %s->%s\n",
++            printf(" %s runstate_change_process {%lld,%lld} d%uv%u %s->%s\n",
+                    ri->dump_header,
+-                   type?"runstate_continue":"runstate_change",
+                    r->p1, r->p2,
+                    r->dom, r->vcpu,
+                    runstate_name[sevt.old_runstate],
+                    runstate_name[sevt.new_runstate]);
+         } else {
+-            printf(" %s %s d%uv%u %s->%s\n",
++            printf(" %s runstate_change_process d%uv%u %s->%s\n",
+                    ri->dump_header,
+-                   type?"runstate_continue":"runstate_change",
+                    r->dom, r->vcpu,
+                    runstate_name[sevt.old_runstate],
+                    runstate_name[sevt.new_runstate]);
+@@ -6313,18 +6201,15 @@
+     }
+ 
+     /* Sanity check: expected transitions */
+-    if ( type == CHANGE )
+-    {
+-        if( (sevt.new_runstate == RUNSTATE_RUNNING
+-             && sevt.old_runstate != RUNSTATE_RUNNABLE)
+-            || (sevt.new_runstate == RUNSTATE_BLOCKED
+-                && sevt.old_runstate == RUNSTATE_RUNNABLE ) )
+-        {
+-            fprintf(warn, "Strange, d%dv%d unexpected runstate transition %s->%s\n",
+-                    r->dom, r->vcpu,
+-                    runstate_name[sevt.old_runstate],
+-                    runstate_name[sevt.new_runstate]);
+-        }
++    if( (sevt.new_runstate == RUNSTATE_RUNNING
++         && sevt.old_runstate != RUNSTATE_RUNNABLE)
++        || (sevt.new_runstate == RUNSTATE_BLOCKED
++            && sevt.old_runstate == RUNSTATE_RUNNABLE ) )
++    {
++        fprintf(warn, "Strange, d%dv%d unexpected runstate transition %s->%s\n",
++                r->dom, r->vcpu,
++                runstate_name[sevt.old_runstate],
++                runstate_name[sevt.new_runstate]);
+     }
+     
+     if(r->vcpu > MAX_CPUS)
+@@ -6341,8 +6226,6 @@
+      * be reset, it will be reset below. */
+     last_oldstate = v->runstate.last_oldstate;
+     v->runstate.last_oldstate.wrong = RUNSTATE_INIT;
+-    runstate_tsc = v->runstate.tsc;
+-    old_runstate = v->runstate.state;
+ 
+     /* Close vmexits when the putative reason for blocking / &c stops.
+      * This way, we don't account cpu contention to some other overhead. */
+@@ -6506,30 +6389,8 @@
+ update:
+     /* Actually update the runstate.  Special things to do if we're starting
+      * or stopping actually running on a physical cpu. */
+-    if ( type == CONTINUE )
+-    {
+-        if( v->runstate.state == RUNSTATE_INIT ) {
+-            /* Start-of-day; account first tsc -> now to v */
+-            vcpu_start(p, v);
+-        } else {
+-            /* Continue running.  First, do some sanity checks */
+-            if( v->runstate.state != RUNSTATE_RUNNING ) {
+-                /* This should never happen. */
+-                fprintf(stderr, "FATAL: sevt.old_runstate running, but d%dv%d runstate %s!\n",
+-                        v->d->did, v->vid, runstate_name[v->runstate.state]);
+-                exit(1);
+-            } else if ( v->p != p ) {
+-                fprintf(stderr, "FATAL: continue on p%d, but d%dv%d p%d!\n",
+-                        p->pid, v->d->did, v->vid,
+-                        v->p ? v->p->pid : -1);
+-                exit(1);
+-            }
+-            
+-            runstate_update(v, RUNSTATE_RUNNING, ri->tsc);
+-        }
+-    }
+-    else if ( sevt.old_runstate == RUNSTATE_RUNNING
+-              || v->runstate.state == RUNSTATE_RUNNING )
++    if ( sevt.old_runstate == RUNSTATE_RUNNING
++         || v->runstate.state == RUNSTATE_RUNNING )
+     {
+ #if 0
+         /* A lot of traces include cpi that shouldn't... */
+@@ -6741,7 +6602,7 @@
+         }
+     } else {
+         if(ri->evt.sub == 1)
+-            sched_runstate_process(p);
++            sched_runstate_change_process(p);
+         else {
+             UPDATE_VOLUME(p, sched_verbose, ri->size);
+             process_generic(&p->ri);
+@@ -6862,39 +6723,25 @@
+ 
+ struct lost_record_struct {
+         int lost_records;
+-        unsigned did:16,vid:16;
+-        tsc_t first_tsc;
+ };
+ 
+ void process_lost_records(struct pcpu_info *p)
+ {
+     struct record_info *ri = &p->ri;
+     struct lost_record_struct *r = (typeof(r))ri->d;
+-    tsc_t first_tsc; /* TSC of first record that was lost */
+ 
+     /* Sanity checks */
+-    if(ri->extra_words != 4)
++    if(ri->extra_words != 1)
+     {
+         fprintf(warn, "FATAL: Lost record has unexpected extra words %d!\n",
+                 ri->extra_words);
+         dump_unexpected_and_exit(ri);
+     }
+-    else
+-        first_tsc = r->first_tsc;
+ 
+     if(opt.dump_cooked || opt.dump_all)
+     {
+-        if(p->current)
+-            printf(" %s lost_records count %d d%uv%u (cur d%dv%d) first_tsc %lld\n",
+-                   ri->dump_header, r->lost_records,
+-                   r->did, r->vid,
+-                   p->current->d->did, p->current->vid,
+-                   r->first_tsc);
+-        else
+-            printf(" %s lost_records count %d d%uv%u (cur X) first_tsc %lld\n",
+-                   ri->dump_header, r->lost_records,
+-                   r->did, r->vid,
+-                   r->first_tsc);
++        printf(" %s lost_records count %d\n",
++               ri->dump_header, r->lost_records);
+     }
+ 
+ #if 0
+@@ -6916,15 +6763,12 @@
+          * - Make sure there are no warnings / strangeness with the
+          * current vcpu (if it gets scheduled elsewhere).
+          */
+-        vcpu_prev_update(p, p->current, first_tsc, RUNSTATE_LOST);
+-    }
+-#if 0
+-    vcpu_next_update(p, default_domain.vcpu[p->pid], first_tsc);
+-    if(p->current->data_type == VCPU_DATA_HVM) {
+-        p->current->hvm.vmexit_valid=0;
+-    }
+-#endif
+-
++        vcpu_prev_update(p, p->current, ri->tsc, RUNSTATE_LOST);
++    }
++
++    vcpu_next_update(p, default_domain.vcpu[p->pid], ri->tsc);
++
++#if 0
+     /* The lost record trace is processed early -- i.e.,
+      * After the last good record, rather than when the next
+      * record is processed.  Between the time it's processed and
+@@ -6964,13 +6808,10 @@
+             }
+         }
+     }
+-
+-    p->lost_record.domain_valid=1;
+-    p->lost_record.did=r->did;
+-    p->lost_record.vid=r->vid;
+-}
+-
+-
++#endif
++}
++
++#if 0
+ void process_lost_records_end(struct pcpu_info *p)
+ {
+     struct record_info *ri = &p->ri;
+@@ -7019,6 +6860,7 @@
+         }
+     }
+ }
++#endif
+ 
+ void base_process(struct pcpu_info *p) {
+     struct record_info *ri = &p->ri;
+@@ -7027,9 +6869,11 @@
+     case TRC_LOST_RECORDS:
+         process_lost_records(p);
+         break;
++#if 0
+     case TRC_LOST_RECORDS_END:
+         process_lost_records_end(p);
+         break;
++#endif
+     default:
+         process_generic(ri);
+     }
+@@ -7403,8 +7247,10 @@
+         p->volume.buffer_first_tsc = ri->tsc;
+ 
+  out:
++#if 0
+     /* Lost records gets processed twice */
+     if(ri->event != TRC_LOST_RECORDS)
++#endif
+         p->file_offset += ri->size;
+ }
+ 
+@@ -7550,12 +7396,14 @@
+         if(p->first_tsc == 0)
+             p->first_tsc = tsc;
+ 
++#if 0
+         /* We process lost record twice: once at the first_tsc,
+            once at the time it was placed in the log */
+         if(ri->event == TRC_LOST_RECORDS && ri->extra_words == 4) {
+             struct lost_record_struct *r = (typeof(r))ri->d;
+             p->order_tsc = r->first_tsc + p->tsc_skew.offset;
+         } else
++#endif
+             p->order_tsc = tsc;
+ 
+         p->last_tsc = tsc;
+@@ -7622,9 +7470,11 @@
+     {
+         int i;
+         for(i=max_active_pcpu + 1; i<= P.max_active_pcpu; i++) {
++#if 0
+             if(P.pcpu[i].lost_record.active)
+                 s[i]='l';
+             else
++#endif
+                 s[i]='-';
+         }
+     }
+@@ -7677,7 +7527,7 @@
+             return;
+ 
+         process_record(p);
+-
++#if 0
+         /* Lost records gets processed twice. */
+         if(p->ri.event == TRC_LOST_RECORDS) {
+             p->ri.event = TRC_LOST_RECORDS_END;
+@@ -7690,6 +7540,7 @@
+             }
+         }
+         else
++#endif
+             read_record(G.fd, p);
+ 
+     }
+@@ -8510,7 +8361,7 @@
+     .doc = "",
+ };
+ 
+-const char *argp_program_version = "xenalyze - Open-source xen-unstable (3.4)";
++const char *argp_program_version = "xenalyze - Open-source xen (3.3)";
+ const char *argp_program_bug_address = "George Dunlap <george.dunlap@eu.citrix.com>";
+ 
+ 
+@@ -8520,6 +8371,14 @@
+ 
+     argp_parse(&parser_def, argc, argv, 0, NULL, NULL);
+ 
++    /* Domain tracking not implemented, summary mode broken */
++    if ( opt.summary )
++    {
++        fprintf(stderr, "FATAL: Domain tracking not back-ported to 3.3.  Summary mode useless.\n");
++        exit(1);
++    }
++        
++
+     if (G.trace_file == NULL)
+         exit(1);
+ 

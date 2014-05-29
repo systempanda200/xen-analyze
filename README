@@ -1,0 +1,41 @@
+Basic building for the latest (supported) -unstable hypervisor is
+pretty simple:
+
+$ make
+
+The resulting xenalyze binary can be used as described in the
+xenalyze.html documentation.
+
+If you want to build for an earlier version of the hypervisor, you
+must apply the patches in the back-patches directory.  Look for the
+TARGETS file in that directory for the sequence of patches to apply
+for each target.
+
+If you just want to build, applying them with patch -p1 < filename in
+order will suffice.
+
+If you want to do any development / bux fixing, you should use
+mercurial queues:
+ $ hg qimport back-patches/file1
+ $ hg qpush
+ $ hg qimport back-patches/file2
+ $ hg qpush
+   ...
+
+Make sure that you qpush between qimports, or the order of the patches
+will be reversed (LIFO).
+
+If you do submit a patch, make sure to keep changes to back-patches
+separate from changes to the core file.  E.g., if you apply patches
+and develop a new xenalyze feature, use hg diff (or a "working"
+mercurial patch on the top) to separate the new feature from the
+backport patches.  Pop all the back-patches, apply the new-feature
+patch, and commit.  Then qpush one at a time and build, to make sure
+that no changes need to be made to the back-patches.
+
+This is a bit of a hassle, but I think there's a good reason for it.
+The file format for a given release is fixed at the time of release.
+But the kinds of analysis that might want to be done generally develop
+*after* that release.  Rather than limit new functionality to new
+releases, or maintain separate branches, we maintain back-patches that
+just change information related to the file format differences.

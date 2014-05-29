@@ -1,0 +1,16 @@
+Xen 3.4:
+ 3.4.diff
+
+Xen 3.3: 
+ 3.4.diff
+ 3.4-3.3.diff
+
+XenServer 5.5:
+ xs5.5.patch
+
+XenServer 5.0:
+ 3.4-3.3.patch
+ xs5.5.patch
+ xs5.0.patch
+
+Earlier versions: patches accepted.
