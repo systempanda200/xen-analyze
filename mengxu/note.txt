@@ -1,7 +1,7 @@
 xenalyze.c
 ===
 How to read the --dump-all output?
-
+ 
 void dump_generic(FILE * f, struct record_info *ri)
 {
     int i;
